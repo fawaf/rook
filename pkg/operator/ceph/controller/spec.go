@@ -18,6 +18,8 @@ limitations under the License.
 package controller
 
 import (
+	"context"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path"
@@ -39,6 +41,8 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/sets"
 )
 
 const (
@@ -388,8 +392,8 @@ func AdminFlags(cluster *client.ClusterInfo) []string {
 func NetworkBindingFlags(cluster *client.ClusterInfo, spec *cephv1.ClusterSpec) []string {
 	var args []string
 
-	// As of Pacific, Ceph supports dual-stack, so setting IPv6 family without disabling IPv4 binding actually enables dual-stack
-	// This is likely not user's intent, so on Pacific let's make sure to disable IPv4 when IPv6 is selected
+	// Ceph supports dual-stack, so setting IPv6 family without disabling IPv4 binding actually enables dual-stack
+	// This is likely not user's intent, so let's make sure to disable IPv4 when IPv6 is selected
 	if !spec.Network.DualStack {
 		switch spec.Network.IPFamily {
 		case cephv1.IPv4:
@@ -897,4 +901,57 @@ func GetContainerImagePullPolicy(containerImagePullPolicy v1.PullPolicy) v1.Pull
 	}
 
 	return containerImagePullPolicy
+}
+
+// GenerateLivenessProbeTcpPort generates a liveness probe that makes sure a daemon has
+// TCP a socket binded to specific port, and may create new connection.
+func GenerateLivenessProbeTcpPort(port, failureThreshold int32) *v1.Probe {
+	return &v1.Probe{
+		ProbeHandler: v1.ProbeHandler{
+			TCPSocket: &v1.TCPSocketAction{
+				Port: intstr.IntOrString{IntVal: port},
+			},
+		},
+		InitialDelaySeconds: livenessProbeInitialDelaySeconds,
+		TimeoutSeconds:      livenessProbeTimeoutSeconds,
+		FailureThreshold:    failureThreshold,
+	}
+}
+
+// GenerateLivenessProbeViaRpcinfo creates a liveness probe using 'rpcinfo' shell
+// command which checks that the local NFS daemon has TCP a socket binded to
+// specific port, and it has valid reply to NULL RPC request.
+func GenerateLivenessProbeViaRpcinfo(port uint16, failureThreshold int32) *v1.Probe {
+	bb := make([]byte, 2)
+	binary.BigEndian.PutUint16(bb, port) // port-num in network-order
+	servAddr := fmt.Sprintf("127.0.0.1.%d.%d", bb[0], bb[1])
+	return &v1.Probe{
+		ProbeHandler: v1.ProbeHandler{
+			Exec: &v1.ExecAction{
+				Command: []string{"rpcinfo", "-a", servAddr, "-T", "tcp", "nfs", "4"},
+			},
+		},
+		InitialDelaySeconds: livenessProbeInitialDelaySeconds,
+		TimeoutSeconds:      livenessProbeTimeoutSeconds,
+		FailureThreshold:    failureThreshold,
+	}
+}
+
+func GetDaemonsToSkipReconcile(ctx context.Context, clusterd *clusterd.Context, namespace, daemonName, label string) (sets.Set[string], error) {
+	listOpts := metav1.ListOptions{LabelSelector: fmt.Sprintf("%s=%s,%s", k8sutil.AppAttr, label, cephv1.SkipReconcileLabelKey)}
+
+	deployments, err := clusterd.Clientset.AppsV1().Deployments(namespace).List(ctx, listOpts)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to query %q to skip reconcile", daemonName)
+	}
+
+	result := sets.New[string]()
+	for _, deployment := range deployments.Items {
+		if daemonID, ok := deployment.Labels[daemonName]; ok {
+			logger.Infof("found %s %q pod to skip reconcile", daemonID, daemonName)
+			result.Insert(daemonID)
+		}
+	}
+
+	return result, nil
 }

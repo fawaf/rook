@@ -27,6 +27,7 @@ import (
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	cephclient "github.com/rook/rook/pkg/daemon/ceph/client"
 	cephutil "github.com/rook/rook/pkg/daemon/ceph/util"
+	"github.com/rook/rook/pkg/operator/ceph/config"
 	"github.com/rook/rook/pkg/operator/ceph/controller"
 	"github.com/rook/rook/pkg/operator/ceph/version"
 	"github.com/rook/rook/pkg/operator/k8sutil"
@@ -164,7 +165,7 @@ func (c *Cluster) checkHealth(ctx context.Context) error {
 		return errors.New("skipping mon health check since there are no monitors")
 	}
 
-	monsToSkipReconcile, err := c.getMonsToSkipReconcile()
+	monsToSkipReconcile, err := controller.GetDaemonsToSkipReconcile(c.ClusterInfo.Context, c.context, c.ClusterInfo.Namespace, config.MonType, AppName)
 	if err != nil {
 		return errors.Wrap(err, "failed to check for mons to skip reconcile")
 	}
@@ -363,6 +364,16 @@ func (c *Cluster) checkHealth(ctx context.Context) error {
 				c.failMon(len(c.ClusterInfo.Monitors), desiredMonCount, mon.Name)
 				return nil
 			}
+		}
+	}
+
+	// failover any mons present in the mon fail over list
+	for _, mon := range c.ClusterInfo.Monitors {
+		if c.monsToFailover.Has(mon.Name) {
+			logger.Infof("fail over mon %q from the mon fail over list", mon.Name)
+			c.failMon(len(c.ClusterInfo.Monitors), desiredMonCount, mon.Name)
+			c.monsToFailover.Delete(mon.Name)
+			return nil
 		}
 	}
 

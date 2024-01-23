@@ -13,6 +13,11 @@ on:
     paths-ignore:
       - "Documentation/**"
       - "design/**"
+  workflow_dispatch:
+    inputs:
+      ceph-image:
+        description: 'Ceph image for creating Ceph cluster'
+        default: 'quay.io/ceph/ceph:v18'
 
 defaults:
   run:
@@ -41,8 +46,9 @@ jobs:
 
       - name: setup cluster resources
         uses: ./.github/workflows/canary-test-config
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: set Ceph version in CephCluster manifest
+        run: tests/scripts/github-action-helper.sh replace_ceph_image  "deploy/examples/cluster-test.yaml" "${{ github.event.inputs.ceph-image }}"
 
       - name: validate-yaml
         run: tests/scripts/github-action-helper.sh validate_yaml
@@ -55,8 +61,11 @@ jobs:
       - name: deploy cluster
         run: tests/scripts/github-action-helper.sh deploy_cluster
 
+      - name: setup csi-addons
+        run: tests/scripts/csiaddons.sh setup_csiaddons
+
       - name: wait for prepare pod
-        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod
+        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod 2
 
       - name: wait for ceph to be ready
         run: tests/scripts/github-action-helper.sh wait_for_ceph_to_be_ready all 2
@@ -146,8 +155,8 @@ jobs:
         run: |
           toolbox=$(kubectl get pod -l app=rook-ceph-tools -n rook-ceph -o jsonpath='{.items[*].metadata.name}')
           # create `radosNamespace1` rados-namespace for `replicapool` rbd data-pool
-          kubectl -n rook-ceph exec $toolbox -- rbd namespace create replicapool/radosNamespace1
-          kubectl -n rook-ceph exec $toolbox -- python3 /etc/ceph/create-external-cluster-resources.py --rbd-data-pool-name replicapool --rados-namespace radosNamespace1
+          kubectl -n rook-ceph exec $toolbox -- rbd namespace create replicapool/radosnamespace1
+          kubectl -n rook-ceph exec $toolbox -- python3 /etc/ceph/create-external-cluster-resources.py --rbd-data-pool-name replicapool --rados-namespace radosnamespace1
            # test the rados namespace which not exit for replicapool(false testing)
           if output=$(kubectl -n rook-ceph exec $toolbox -- python3 /etc/ceph/create-external-cluster-resources.py --rbd-data-pool-name replicapool --rados-namespace false-test-namespace); then
             echo "unexpectedly succeeded after passing the wrong rados namespace: $output"
@@ -160,6 +169,11 @@ jobs:
         run: |
           toolbox=$(kubectl get pod -l app=rook-ceph-tools -n rook-ceph -o jsonpath='{.items[*].metadata.name}')
           kubectl -n rook-ceph exec $toolbox -- python3 /etc/ceph/create-external-cluster-resources.py --rbd-data-pool-name replicapool --k8s-cluster-name rookstorage --restricted-auth-permission true
+
+      - name: test external script with restricted_auth_permission flag and with --cluster-name legacy flag
+        run: |
+          toolbox=$(kubectl get pod -l app=rook-ceph-tools -n rook-ceph -o jsonpath='{.items[*].metadata.name}')
+          kubectl -n rook-ceph exec $toolbox -- python3 /etc/ceph/create-external-cluster-resources.py --rbd-data-pool-name replicapool --cluster-name rookstorage --restricted-auth-permission true
 
       - name: test external script with restricted_auth_permission flag
         run: |
@@ -236,6 +250,11 @@ jobs:
       - name: check-ownerreferences
         run: tests/scripts/github-action-helper.sh check_ownerreferences
 
+      - name: validate csi-addons
+        run: |
+          tests/scripts/csiaddons.sh verify_crd_created
+          tests/scripts/csiaddons.sh verify_container_is_running
+
       - name: test osd removal jobs
         run: |
           kubectl -n rook-ceph delete deploy/rook-ceph-operator
@@ -274,8 +293,9 @@ jobs:
 
       - name: setup cluster resources
         uses: ./.github/workflows/canary-test-config
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: set Ceph version in CephCluster manifest
+        run: tests/scripts/github-action-helper.sh replace_ceph_image  "deploy/examples/cluster-test.yaml" "${{ github.event.inputs.ceph-image }}"
 
       - name: validate-yaml
         run: tests/scripts/github-action-helper.sh validate_yaml
@@ -283,7 +303,7 @@ jobs:
       - name: use local disk as OSD
         run: |
           tests/scripts/github-action-helper.sh use_local_disk
-          BLOCK=$(sudo lsblk --paths|awk '/14G/ {print $1}'| head -1)
+          BLOCK=$(sudo lsblk --paths|awk '/14G/ || /64G/ {print $1}'| head -1)
           tests/scripts/create-bluestore-partitions.sh --disk "$BLOCK" --wipe-only
 
       - name: prepare loop devices for osds
@@ -297,7 +317,7 @@ jobs:
           tests/scripts/github-action-helper.sh create_operator_toolbox
 
       - name: wait for prepare pod
-        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod
+        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod 2
 
       - name: wait for ceph to be ready
         run: tests/scripts/github-action-helper.sh wait_for_ceph_to_be_ready osd 2
@@ -340,8 +360,9 @@ jobs:
 
       - name: setup cluster resources
         uses: ./.github/workflows/canary-test-config
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: set Ceph version in CephCluster manifest
+        run: tests/scripts/github-action-helper.sh replace_ceph_image  "deploy/examples/cluster-test.yaml" "${{ github.event.inputs.ceph-image }}"
 
       - name: validate-yaml
         run: tests/scripts/github-action-helper.sh validate_yaml
@@ -349,14 +370,14 @@ jobs:
       - name: use local disk as OSD
         run: |
           tests/scripts/github-action-helper.sh use_local_disk
-          BLOCK=$(sudo lsblk --paths|awk '/14G/ {print $1}'| head -1)
+          BLOCK=$(sudo lsblk --paths|awk '/14G/ || /64G/ {print $1}'| head -1)
           tests/scripts/create-bluestore-partitions.sh --disk "$BLOCK" --wipe-only
 
       - name: deploy cluster
         run: tests/scripts/github-action-helper.sh deploy_cluster two_osds_in_device
 
       - name: wait for prepare pod
-        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod
+        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod 2
 
       - name: wait for ceph to be ready
         run: tests/scripts/github-action-helper.sh wait_for_ceph_to_be_ready osd 2
@@ -386,15 +407,16 @@ jobs:
 
       - name: setup cluster resources
         uses: ./.github/workflows/canary-test-config
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: set Ceph version in CephCluster manifest
+        run: tests/scripts/github-action-helper.sh replace_ceph_image  "deploy/examples/cluster-test.yaml" "${{ github.event.inputs.ceph-image }}"
 
       - name: validate-yaml
         run: tests/scripts/github-action-helper.sh validate_yaml
 
       - name: use local disk as OSD
         run: |
-          BLOCK=$(sudo lsblk --paths|awk '/14G/ {print $1}'| head -1)
+          BLOCK=$(sudo lsblk --paths|awk '/14G/ || /64G/ {print $1}'| head -1)
           tests/scripts/github-action-helper.sh use_local_disk
           tests/scripts/create-bluestore-partitions.sh --disk "$BLOCK" --wipe-only
 
@@ -408,7 +430,7 @@ jobs:
         run: tests/scripts/github-action-helper.sh deploy_cluster osd_with_metadata_device
 
       - name: wait for prepare pod
-        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod
+        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod 1
 
       - name: wait for ceph to be ready
         run: tests/scripts/github-action-helper.sh wait_for_ceph_to_be_ready osd 1
@@ -438,15 +460,16 @@ jobs:
 
       - name: setup cluster resources
         uses: ./.github/workflows/canary-test-config
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: set Ceph version in CephCluster manifest
+        run: tests/scripts/github-action-helper.sh replace_ceph_image  "deploy/examples/cluster-test.yaml" "${{ github.event.inputs.ceph-image }}"
 
       - name: validate-yaml
         run: tests/scripts/github-action-helper.sh validate_yaml
 
       - name: use local disk as OSD
         run: |
-          BLOCK=$(sudo lsblk --paths|awk '/14G/ {print $1}'| head -1)
+          BLOCK=$(sudo lsblk --paths|awk '/14G/ || /64G/ {print $1}'| head -1)
           tests/scripts/github-action-helper.sh use_local_disk
           tests/scripts/create-bluestore-partitions.sh --disk "$BLOCK" --wipe-only
 
@@ -454,7 +477,7 @@ jobs:
         run: tests/scripts/github-action-helper.sh deploy_cluster encryption
 
       - name: wait for prepare pod
-        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod
+        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod 1
 
       - name: wait for ceph to be ready
         run: tests/scripts/github-action-helper.sh wait_for_ceph_to_be_ready osd 1
@@ -484,28 +507,29 @@ jobs:
 
       - name: setup cluster resources
         uses: ./.github/workflows/canary-test-config
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: set Ceph version in CephCluster manifest
+        run: tests/scripts/github-action-helper.sh replace_ceph_image  "deploy/examples/cluster-test.yaml" "${{ github.event.inputs.ceph-image }}"
 
       - name: validate-yaml
         run: tests/scripts/github-action-helper.sh validate_yaml
 
       - name: use local disk as OSD
         run: |
-          BLOCK=$(sudo lsblk --paths|awk '/14G/ {print $1}'| head -1)
+          BLOCK=$(sudo lsblk --paths|awk '/14G/ || /64G/ {print $1}'| head -1)
           tests/scripts/github-action-helper.sh use_local_disk
           tests/scripts/create-bluestore-partitions.sh --disk "$BLOCK" --wipe-only
 
       - name: create LV on disk
         run: |
-          BLOCK=$(sudo lsblk --paths|awk '/14G/ {print $1}'| head -1)
+          BLOCK=$(sudo lsblk --paths|awk '/14G/ || /64G/ {print $1}'| head -1)
           tests/scripts/github-action-helper.sh create_LV_on_disk $BLOCK
 
       - name: deploy cluster
         run: tests/scripts/github-action-helper.sh deploy_cluster lvm
 
       - name: wait for prepare pod
-        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod
+        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod 1
 
       - name: wait for ceph to be ready
         run: tests/scripts/github-action-helper.sh wait_for_ceph_to_be_ready osd 1
@@ -535,8 +559,9 @@ jobs:
 
       - name: setup cluster resources
         uses: ./.github/workflows/canary-test-config
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: set Ceph version in CephCluster manifest
+        run: tests/scripts/github-action-helper.sh replace_ceph_image  "tests/manifests/test-cluster-on-pvc-encrypted.yaml" "${{ github.event.inputs.ceph-image }}"
 
       - name: use local disk and create partitions for osds
         run: |
@@ -549,7 +574,7 @@ jobs:
 
       - name: create cluster prerequisites
         run: |
-          BLOCK=$(sudo lsblk --paths|awk '/14G/ {print $1}'| head -1)
+          BLOCK=$(sudo lsblk --paths|awk '/14G/ || /64G/ {print $1}'| head -1)
           tests/scripts/localPathPV.sh "$BLOCK"
           tests/scripts/loopDevicePV.sh 1
           tests/scripts/github-action-helper.sh create_cluster_prerequisites
@@ -565,7 +590,7 @@ jobs:
           tests/scripts/github-action-helper.sh deploy_manifest_with_local_build deploy/examples/toolbox.yaml
 
       - name: wait for prepare pod
-        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod
+        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod 3
 
       - name: wait for ceph to be ready
         run: tests/scripts/github-action-helper.sh wait_for_ceph_to_be_ready osd 3
@@ -580,7 +605,7 @@ jobs:
           kubectl -n rook-ceph logs deploy/rook-ceph-operator
           tests/scripts/github-action-helper.sh wait_for_cleanup_pod
           lsblk
-          BLOCK=$(sudo lsblk --paths|awk '/14G/ {print $1}'| head -1)
+          BLOCK=$(sudo lsblk --paths|awk '/14G/ || /64G/ {print $1}'| head -1)
           sudo head --bytes=60 ${BLOCK}1
           sudo head --bytes=60 ${BLOCK}2
           sudo head --bytes=60 /dev/loop1
@@ -607,8 +632,9 @@ jobs:
 
       - name: setup cluster resources
         uses: ./.github/workflows/canary-test-config
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: set Ceph version in CephCluster manifest
+        run: tests/scripts/github-action-helper.sh replace_ceph_image  "tests/manifests/test-cluster-on-pvc-encrypted.yaml" "${{ github.event.inputs.ceph-image }}"
 
       - name: use local disk
         run: tests/scripts/github-action-helper.sh use_local_disk
@@ -628,7 +654,7 @@ jobs:
           tests/scripts/github-action-helper.sh deploy_manifest_with_local_build deploy/examples/toolbox.yaml
 
       - name: wait for prepare pod
-        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod
+        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod 1
 
       - name: wait for ceph to be ready
         run: tests/scripts/github-action-helper.sh wait_for_ceph_to_be_ready osd 1
@@ -655,8 +681,9 @@ jobs:
 
       - name: setup cluster resources
         uses: ./.github/workflows/canary-test-config
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: set Ceph version in CephCluster manifest
+        run: tests/scripts/github-action-helper.sh replace_ceph_image  "tests/manifests/test-cluster-on-pvc-encrypted.yaml" "${{ github.event.inputs.ceph-image }}"
 
       - name: use local disk
         run: tests/scripts/github-action-helper.sh use_local_disk
@@ -677,7 +704,7 @@ jobs:
           tests/scripts/github-action-helper.sh deploy_manifest_with_local_build deploy/examples/toolbox.yaml
 
       - name: wait for prepare pod
-        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod
+        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod 1
 
       - name: wait for ceph to be ready
         run: |
@@ -706,8 +733,9 @@ jobs:
 
       - name: setup cluster resources
         uses: ./.github/workflows/canary-test-config
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: set Ceph version in CephCluster manifest
+        run: tests/scripts/github-action-helper.sh replace_ceph_image  "tests/manifests/test-cluster-on-pvc-encrypted.yaml" "${{ github.event.inputs.ceph-image }}"
 
       - name: use local disk and create partitions for osds
         run: |
@@ -716,7 +744,7 @@ jobs:
 
       - name: create cluster prerequisites
         run: |
-          tests/scripts/localPathPV.sh $(lsblk --paths|awk '/14G/ {print $1}'| head -1)
+          tests/scripts/localPathPV.sh $(lsblk --paths|awk '/14G/ || /64G/ {print $1}'| head -1)
           tests/scripts/github-action-helper.sh create_cluster_prerequisites
 
       - name: deploy cluster
@@ -728,7 +756,7 @@ jobs:
           tests/scripts/github-action-helper.sh deploy_manifest_with_local_build deploy/examples/toolbox.yaml
 
       - name: wait for prepare pod
-        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod
+        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod 2
 
       - name: wait for ceph to be ready
         run: |
@@ -742,7 +770,7 @@ jobs:
           kubectl -n rook-ceph delete cephcluster rook-ceph
           kubectl -n rook-ceph logs deploy/rook-ceph-operator
           tests/scripts/github-action-helper.sh wait_for_cleanup_pod
-          BLOCK=$(sudo lsblk --paths|awk '/14G/ {print $1}'| head -1)
+          BLOCK=$(sudo lsblk --paths|awk '/14G/ || /64G/ {print $1}'| head -1)
           sudo head --bytes=60 ${BLOCK}1
           sudo head --bytes=60 ${BLOCK}2
           sudo lsblk
@@ -769,8 +797,9 @@ jobs:
 
       - name: setup cluster resources
         uses: ./.github/workflows/canary-test-config
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: set Ceph version in CephCluster manifest
+        run: tests/scripts/github-action-helper.sh replace_ceph_image  "tests/manifests/test-cluster-on-pvc-encrypted.yaml" "${{ github.event.inputs.ceph-image }}"
 
       - name: use local disk
         run: tests/scripts/github-action-helper.sh use_local_disk
@@ -789,7 +818,7 @@ jobs:
           tests/scripts/github-action-helper.sh deploy_manifest_with_local_build deploy/examples/toolbox.yaml
 
       - name: wait for prepare pod
-        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod
+        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod 1
 
       - name: wait for ceph to be ready
         run: |
@@ -819,8 +848,9 @@ jobs:
 
       - name: setup cluster resources
         uses: ./.github/workflows/canary-test-config
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: set Ceph version in CephCluster manifest
+        run: tests/scripts/github-action-helper.sh replace_ceph_image  "tests/manifests/test-cluster-on-pvc-encrypted.yaml" "${{ github.event.inputs.ceph-image }}"
 
       - name: use local disk
         run: tests/scripts/github-action-helper.sh use_local_disk
@@ -841,7 +871,7 @@ jobs:
           tests/scripts/github-action-helper.sh deploy_manifest_with_local_build deploy/examples/toolbox.yaml
 
       - name: wait for prepare pod
-        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod
+        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod 1
 
       - name: wait for ceph to be ready
         run: |
@@ -879,8 +909,9 @@ jobs:
 
       - name: setup cluster resources
         uses: ./.github/workflows/canary-test-config
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: set Ceph version in CephCluster manifest
+        run: tests/scripts/github-action-helper.sh replace_ceph_image  "tests/manifests/test-cluster-on-pvc-encrypted.yaml" "${{ github.event.inputs.ceph-image }}"
 
       - name: use local disk and create partitions for osds
         run: |
@@ -889,7 +920,7 @@ jobs:
 
       - name: create cluster prerequisites
         run: |
-          tests/scripts/localPathPV.sh $(lsblk --paths|awk '/14G/ {print $1}'| head -1)
+          tests/scripts/localPathPV.sh $(lsblk --paths|awk '/14G/ || /64G/ {print $1}'| head -1)
           tests/scripts/github-action-helper.sh create_cluster_prerequisites
 
       - name: deploy vault
@@ -909,7 +940,7 @@ jobs:
           tests/scripts/github-action-helper.sh deploy_manifest_with_local_build deploy/examples/toolbox.yaml
 
       - name: wait for prepare pod
-        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod
+        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod 2
 
       - name: wait for ceph to be ready
         run: |
@@ -960,8 +991,9 @@ jobs:
 
       - name: setup cluster resources
         uses: ./.github/workflows/canary-test-config
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: set Ceph version in CephCluster manifest
+        run: tests/scripts/github-action-helper.sh replace_ceph_image  "tests/manifests/test-cluster-on-pvc-encrypted.yaml" "${{ github.event.inputs.ceph-image }}"
 
       - name: use local disk and create partitions for osds
         run: |
@@ -970,7 +1002,7 @@ jobs:
 
       - name: create cluster prerequisites
         run: |
-          tests/scripts/localPathPV.sh $(lsblk --paths|awk '/14G/ {print $1}'| head -1)
+          tests/scripts/localPathPV.sh $(lsblk --paths|awk '/14G/ || /64G/ {print $1}'| head -1)
           tests/scripts/github-action-helper.sh create_cluster_prerequisites
 
       - name: deploy vault
@@ -986,7 +1018,7 @@ jobs:
           tests/scripts/github-action-helper.sh deploy_manifest_with_local_build deploy/examples/toolbox.yaml
 
       - name: wait for prepare pod
-        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod
+        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod 2
 
       - name: wait for ceph to be ready
         run: |
@@ -1021,8 +1053,9 @@ jobs:
 
       - name: setup cluster resources
         uses: ./.github/workflows/canary-test-config
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: set Ceph version in CephCluster manifest
+        run: tests/scripts/github-action-helper.sh replace_ceph_image  "tests/manifests/test-cluster-on-pvc-encrypted.yaml" "${{ github.event.inputs.ceph-image }}"
 
       - name: create cluster prerequisites
         run: tests/scripts/github-action-helper.sh create_cluster_prerequisites
@@ -1032,7 +1065,7 @@ jobs:
 
       - name: create LV on disk
         run: |
-          BLOCK=$(sudo lsblk --paths|awk '/14G/ {print $1}'| head -1)
+          BLOCK=$(sudo lsblk --paths|awk '/14G/ || /64G/ {print $1}'| head -1)
           tests/scripts/github-action-helper.sh create_LV_on_disk $BLOCK
           tests/scripts/localPathPV.sh /dev/test-rook-vg/test-rook-lv
 
@@ -1044,7 +1077,7 @@ jobs:
           tests/scripts/github-action-helper.sh deploy_manifest_with_local_build deploy/examples/toolbox.yaml
 
       - name: wait for prepare pod
-        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod
+        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod 1
 
       - name: wait for ceph to be ready
         run: tests/scripts/github-action-helper.sh wait_for_ceph_to_be_ready osd 1
@@ -1074,13 +1107,14 @@ jobs:
 
       - name: setup cluster resources
         uses: ./.github/workflows/canary-test-config
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: set Ceph version in CephCluster manifest
+        run: tests/scripts/github-action-helper.sh replace_ceph_image  "deploy/examples/cluster-test.yaml" "${{ github.event.inputs.ceph-image }}"
 
       - name: use local disk into two partitions
         run: |
           tests/scripts/github-action-helper.sh use_local_disk
-          BLOCK=$(sudo lsblk --paths|awk '/14G/ {print $1}'| head -1)
+          BLOCK=$(sudo lsblk --paths|awk '/14G/ || /64G/ {print $1}'| head -1)
           tests/scripts/create-bluestore-partitions.sh --disk "$BLOCK" --osd-count 2
           sudo lsblk
 
@@ -1213,7 +1247,7 @@ jobs:
       - name: create replicated mirrored filesystem on cluster 2
         run: |
           cd deploy/examples/
-          yq w -i filesystem-test.yaml metadata.namespace rook-ceph-secondary
+          sed -i 's/namespace: rook-ceph/namespace: rook-ceph-secondary/g' filesystem-test.yaml
           yq w -i filesystem-test.yaml spec.mirroring.enabled true
           kubectl create -f filesystem-test.yaml
 
@@ -1303,7 +1337,7 @@ jobs:
           # echo "snapshots: $snaps"
           # if [ $num_snaps_target = $snaps ]
           # then echo "Snapshots have synced."
-          # else echo "Snaps have not synced. NEEDS INVESTIGATION"
+          # else echo "Snapshots have not synced. NEEDS INVESTIGATION"
           # fi
 
       - name: collect common logs
@@ -1327,14 +1361,14 @@ jobs:
         with:
           use-tmate: ${{ secrets.USE_TMATE }}
 
+      - name: set Ceph version in CephCluster manifest
+        run: tests/scripts/github-action-helper.sh replace_ceph_image  "deploy/examples/cluster-test.yaml" "${{ github.event.inputs.ceph-image }}"
+
       - name: run RGW multisite test
         uses: ./.github/workflows/rgw-multisite-test
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          # ceph-image: # use default
 
       - name: upload test result
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: rgw-multisite-testing
@@ -1366,7 +1400,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: upload test result
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: encryption-pvc-kms-ibm-kp
@@ -1388,14 +1422,15 @@ jobs:
           use-tmate: ${{ secrets.USE_TMATE }}
 
       - name: setup golang
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: "1.21"
 
       - name: setup cluster resources
         uses: ./.github/workflows/canary-test-config
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: set Ceph version in CephCluster manifest
+        run: tests/scripts/github-action-helper.sh replace_ceph_image  "deploy/examples/cluster-test.yaml" "${{ github.event.inputs.ceph-image }}"
 
       - name: install deps
         shell: bash --noprofile --norc -eo pipefail -x {0}
@@ -1424,7 +1459,7 @@ jobs:
         run: tests/scripts/github-action-helper.sh deploy_multus_cluster
 
       - name: wait for prepare pod
-        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod
+        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod 2
 
       - name: wait for ceph to be ready
         run: IS_POD_NETWORK=true IS_MULTUS=true tests/scripts/github-action-helper.sh wait_for_ceph_to_be_ready osd 2
@@ -1470,8 +1505,9 @@ jobs:
 
       - name: setup cluster resources
         uses: ./.github/workflows/canary-test-config
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: set Ceph version in CephCluster manifest
+        run: tests/scripts/github-action-helper.sh replace_ceph_image  "deploy/examples/cluster-test.yaml" "${{ github.event.inputs.ceph-image }}"
 
       - name: use local disk and create partitions for osds
         run: |
@@ -1482,7 +1518,7 @@ jobs:
         run: tests/scripts/github-action-helper.sh deploy_csi_hostnetwork_disabled_cluster
 
       - name: wait for prepare pod
-        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod
+        run: tests/scripts/github-action-helper.sh wait_for_prepare_pod 2
 
       - name: wait for ceph to be ready
         run: IS_POD_NETWORK=true tests/scripts/github-action-helper.sh wait_for_ceph_to_be_ready osd 2

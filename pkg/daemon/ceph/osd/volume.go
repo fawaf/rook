@@ -33,6 +33,7 @@ import (
 	"github.com/rook/rook/pkg/clusterd"
 	"github.com/rook/rook/pkg/daemon/ceph/client"
 	oposd "github.com/rook/rook/pkg/operator/ceph/cluster/osd"
+	"github.com/rook/rook/pkg/operator/ceph/cluster/osd/config"
 	cephver "github.com/rook/rook/pkg/operator/ceph/version"
 	"github.com/rook/rook/pkg/util/display"
 	"github.com/rook/rook/pkg/util/sys"
@@ -414,6 +415,12 @@ func (a *OsdAgent) allowRawMode(context *clusterd.Context) (bool, error) {
 	// by default assume raw mode
 	allowRawMode := true
 
+	// ceph-volume raw mode does not support encryption yet
+	if a.storeConfig.EncryptedDevice {
+		logger.Debug("won't use raw mode since encryption is enabled")
+		allowRawMode = false
+	}
+
 	// ceph-volume raw mode does not support more than one OSD per disk
 	osdsPerDeviceCountString := sanitizeOSDsPerDevice(a.storeConfig.OSDsPerDevice)
 	osdsPerDeviceCount, err := strconv.Atoi(osdsPerDeviceCountString)
@@ -459,6 +466,19 @@ func isSafeToUseRawMode(device *DeviceOsdIDEntry, cephVersion cephver.CephVersio
 	return true
 }
 
+func lvmModeAllowed(device *DeviceOsdIDEntry, storeConfig *config.StoreConfig) bool {
+	if device.DeviceInfo.Type == sys.LVMType {
+		logger.Infof("skipping device %q for lvm mode since LVM logical volumes don't support `metadataDevice` or `osdsPerDevice` > 1", device.Config.Name)
+		return false
+	}
+	if device.DeviceInfo.Type == sys.PartType && storeConfig.EncryptedDevice {
+		logger.Infof("skipping partition %q for lvm mode since encryption is not supported on partitions with a `metadataDevice` or `osdsPerDevice > 1`", device.Config.Name)
+		return false
+	}
+
+	return true
+}
+
 func (a *OsdAgent) initializeDevices(context *clusterd.Context, devices *DeviceOsdMapping) error {
 	// Should we allow ceph-volume raw mode?
 	allowRawMode, err := a.allowRawMode(context)
@@ -497,7 +517,9 @@ func (a *OsdAgent) initializeDevices(context *clusterd.Context, devices *DeviceO
 			rawDevices.Entries[name] = device
 			continue
 		}
-		lvmDevices.Entries[name] = device
+		if lvmModeAllowed(device, &a.storeConfig) {
+			lvmDevices.Entries[name] = device
+		}
 	}
 
 	err = a.initializeDevicesRawMode(context, rawDevices)

@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        kubernetes-versions: ["v1.22.17", "v1.28.0"]
+        kubernetes-versions: ["v1.23.17", "v1.29.0"]
     steps:
       - name: checkout
         uses: actions/checkout@v4
@@ -40,13 +40,12 @@ jobs:
       - name: setup cluster resources
         uses: ./.github/workflows/integration-test-config-latest-k8s
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           kubernetes-version: ${{ matrix.kubernetes-versions }}
 
       - name: TestCephUpgradeSuite
         run: |
           tests/scripts/github-action-helper.sh collect_udev_logs_in_background
-          export DEVICE_FILTER=$(lsblk|awk '/14G/ {print $1}'| head -1)
+          export DEVICE_FILTER=$(lsblk|awk '/14G/ || /64G/ {print $1}'| head -1)
           go test -v -timeout 2400s -failfast -run CephUpgradeSuite/TestUpgradeRook github.com/rook/rook/tests/integration
 
       - name: collect common logs
@@ -58,7 +57,7 @@ jobs:
           tests/scripts/collect-logs.sh
 
       - name: Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: ceph-upgrade-suite-artifact-${{ matrix.kubernetes-versions }}
@@ -70,7 +69,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        kubernetes-versions: ["v1.22.17", "v1.28.0"]
+        kubernetes-versions: ["v1.23.17", "v1.29.0"]
     steps:
       - name: checkout
         uses: actions/checkout@v4
@@ -85,7 +84,6 @@ jobs:
       - name: setup cluster resources
         uses: ./.github/workflows/integration-test-config-latest-k8s
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           kubernetes-version: ${{ matrix.kubernetes-versions }}
 
       - name: TestHelmUpgradeSuite
@@ -94,7 +92,7 @@ jobs:
           tests/scripts/helm.sh up
 
           tests/scripts/github-action-helper.sh collect_udev_logs_in_background
-          export DEVICE_FILTER=$(lsblk|awk '/14G/ {print $1}'| head -1)
+          export DEVICE_FILTER=$(lsblk|awk '/14G/ || /64G/ {print $1}'| head -1)
           go test -v -timeout 1800s -failfast -run CephUpgradeSuite/TestUpgradeHelm github.com/rook/rook/tests/integration
 
       - name: collect common logs
@@ -106,7 +104,7 @@ jobs:
           tests/scripts/collect-logs.sh
 
       - name: Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: ceph-upgrade-helm-suite-artifact-${{ matrix.kubernetes-versions }}

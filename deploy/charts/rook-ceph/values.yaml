@@ -82,8 +82,6 @@ csi:
   enableRbdDriver: true
   # -- Enable Ceph CSI CephFS driver
   enableCephfsDriver: true
-  # -- Enable Ceph CSI GRPC Metrics
-  enableGrpcMetrics: false
   # -- Enable host networking for CSI CephFS and RBD nodeplugins. This may be necessary
   # in some network configurations where the SDN does not provide access to an external cluster or
   # there is significant drop in read/write performance
@@ -448,17 +446,9 @@ csi:
   # -- Enable Ceph CSI Liveness sidecar deployment
   enableLiveness: false
 
-  # -- CSI CephFS driver GRPC metrics port
-  # @default -- `9091`
-  cephfsGrpcMetricsPort:
-
   # -- CSI CephFS driver metrics port
   # @default -- `9081`
   cephfsLivenessMetricsPort:
-
-  # -- Ceph CSI RBD driver GRPC metrics port
-  # @default -- `9090`
-  rbdGrpcMetricsPort:
 
   # -- CSI Addons server port
   # @default -- `9070`
@@ -487,34 +477,46 @@ csi:
   # @default -- `/var/lib/kubelet`
   kubeletDirPath:
 
+  # -- Duration in seconds that non-leader candidates will wait to force acquire leadership.
+  # @default -- `137s`
+  csiLeaderElectionLeaseDuration:
+
+  # -- Deadline in seconds that the acting leader will retry refreshing leadership before giving up.
+  # @default -- `107s`
+  csiLeaderElectionRenewDeadline:
+
+  # -- Retry period in seconds the LeaderElector clients should wait between tries of actions.
+  # @default -- `26s`
+  csiLeaderElectionRetryPeriod:
+
   cephcsi:
     # -- Ceph CSI image
-    # @default -- `quay.io/cephcsi/cephcsi:v3.9.0`
+    # @default -- `quay.io/cephcsi/cephcsi:v3.10.1`
     image:
 
   registrar:
     # -- Kubernetes CSI registrar image
-    # @default -- `registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.8.0`
+    # @default -- `registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.9.1`
     image:
 
   provisioner:
     # -- Kubernetes CSI provisioner image
-    # @default -- `registry.k8s.io/sig-storage/csi-provisioner:v3.5.0`
+    # @default -- `registry.k8s.io/sig-storage/csi-provisioner:v3.6.3`
     image:
 
   snapshotter:
     # -- Kubernetes CSI snapshotter image
-    # @default -- `registry.k8s.io/sig-storage/csi-snapshotter:v6.2.2`
+    # @default -- `registry.k8s.io/sig-storage/csi-snapshotter:v6.3.2`
     image:
 
   attacher:
     # -- Kubernetes CSI Attacher image
-    # @default -- `registry.k8s.io/sig-storage/csi-attacher:v4.3.0`
+    # @default -- `registry.k8s.io/sig-storage/csi-attacher:v4.4.2`
     image:
 
   resizer:
     # -- Kubernetes CSI resizer image
-    # @default -- `registry.k8s.io/sig-storage/csi-resizer:v1.8.0`
+    # @default -- `registry.k8s.io/sig-storage/csi-resizer:v1.9.2`
     image:
 
   # -- Image pull policy
@@ -533,7 +535,7 @@ csi:
     # -- Enable CSIAddons
     enabled: false
     # -- CSIAddons Sidecar image
-    image: "quay.io/csiaddons/k8s-sidecar:v0.7.0"
+    image: "quay.io/csiaddons/k8s-sidecar:v0.8.0"
 
   nfs:
     # -- Enable the nfs csi driver
@@ -629,9 +631,6 @@ discover:
   #       cpu: 100m
   #       memory: 128Mi
 
-# -- Whether to disable the admission controller
-disableAdmissionController: true
-
 # -- Runs Ceph Pods as privileged to be able to write to `hostPaths` in OpenShift with SELinux restrictions.
 hostpathRequiresPrivileged: false
 
@@ -647,17 +646,6 @@ imagePullSecrets:
 
 # -- Whether the OBC provisioner should watch on the operator namespace or not, if not the namespace of the cluster will be used
 enableOBCWatchOperatorNamespace: true
-
-# -- Set tolerations and nodeAffinity [^1] for admission controller pod.
-# The admission controller would be best to start on the same nodes as other ceph daemons.
-admissionController:
-  # tolerations:
-  #    - key: key
-  #      operator: Exists
-  #      effect: NoSchedule
-  # nodeAffinity: key1=value1,value2; key2=value3
-
-# [^1]: `nodeAffinity` and `*NodeAffinity` options should have the format `"role=storage,rook; storage=ceph"` or `storage=;role=rook-example` or `storage=;` (_checks only for presence of key_)
 
 monitoring:
   # -- Enable monitoring. Requires Prometheus to be pre-installed.

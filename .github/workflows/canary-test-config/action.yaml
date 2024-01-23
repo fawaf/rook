@@ -1,9 +1,5 @@
 name: Cluster Setup
 description: Cluster setup for canary test
-inputs:
-  github-token:
-    description: GITHUB_TOKEN from the calling workflow
-    required: true
 
 runs:
   using: "composite"
@@ -23,7 +19,7 @@ runs:
     - name: Setup Minikube
       shell: bash --noprofile --norc -eo pipefail -x {0}
       run: |
-        tests/scripts/github-action-helper.sh install_minikube_with_none_driver v1.28.0
+        tests/scripts/github-action-helper.sh install_minikube_with_none_driver v1.29.0
 
     - name: install deps
       shell: bash --noprofile --norc -eo pipefail -x {0}

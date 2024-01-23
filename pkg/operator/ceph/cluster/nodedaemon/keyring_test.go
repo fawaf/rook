@@ -24,5 +24,10 @@ import (
 
 func TestCephCrashCollectorKeyringCaps(t *testing.T) {
 	caps := cephCrashCollectorKeyringCaps()
-	assert.Equal(t, caps, []string{"mon", "allow profile crash", "mgr", "allow profile crash"})
+	assert.Equal(t, caps, []string{"mon", "allow profile crash", "mgr", "allow rw"})
+}
+
+func TestExporterKeyringCaps(t *testing.T) {
+	caps := createExporterKeyringCaps()
+	assert.Equal(t, caps, []string{"mon", "allow profile ceph-exporter", "mgr", "allow r", "osd", "allow r", "mds", "allow r"})
 }

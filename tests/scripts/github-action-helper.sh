@@ -19,7 +19,7 @@ set -xeEo pipefail
 #############
 # VARIABLES #
 #############
-: "${BLOCK:=$(sudo lsblk --paths | awk '/14G/ {print $1}' | head -1)}"
+: "${BLOCK:=$(sudo lsblk --paths | awk '/14G/ || /64G/ {print $1}' | head -1)}"
 NETWORK_ERROR="connection reset by peer"
 SERVICE_UNAVAILABLE_ERROR="Service Unavailable"
 INTERNAL_ERROR="INTERNAL_ERROR"
@@ -273,7 +273,7 @@ function deploy_cluster() {
     exit 1
   fi
   # enable monitoring
-  yq w -i -d1 cluster-test.yaml spec.monitoring.enabled true
+  yq w -i -d0 cluster-test.yaml spec.monitoring.enabled true
   kubectl apply -f https://raw.githubusercontent.com/coreos/prometheus-operator/v0.40.0/bundle.yaml
   kubectl create -f monitoring/rbac.yaml
 
@@ -310,6 +310,7 @@ function deploy_csi_hostnetwork_disabled_cluster() {
 }
 
 function wait_for_prepare_pod() {
+  OSD_COUNT=$1
   get_pod_cmd=(kubectl --namespace rook-ceph get pod --no-headers)
   timeout=450
   start_time="${SECONDS}"
@@ -324,9 +325,9 @@ function wait_for_prepare_pod() {
   timeout=60
   start_time="${SECONDS}"
   while [[ $((SECONDS - start_time)) -lt $timeout ]]; do
-    pod="$("${get_pod_cmd[@]}" --selector app=rook-ceph-osd,ceph_daemon_id=0 --output custom-columns=NAME:.metadata.name,PHASE:status.phase)"
-    if echo "$pod" | grep 'Running'; then break; fi
-    echo 'waiting for OSD 0 pod to be running'
+    pod_count="$("${get_pod_cmd[@]}" --selector app=rook-ceph-osd --output custom-columns=NAME:.metadata.name,PHASE:status.phase | grep --count 'Running' || true)"
+    if [ "$pod_count" -ge "$OSD_COUNT" ]; then break; fi
+    echo 'waiting for $OSD_COUNT OSD pod(s) to be running'
     sleep 1
   done
   # getting the below logs is a best-effort attempt, so use '|| true' to allow failures
@@ -396,25 +397,25 @@ function create_LV_on_disk() {
 }
 
 function deploy_first_rook_cluster() {
-  BLOCK=$(sudo lsblk | awk '/14G/ {print $1}' | head -1)
+  BLOCK=$(sudo lsblk | awk '/14G/ || /64G/ {print $1}' | head -1)
   create_cluster_prerequisites
   cd deploy/examples/
 
   deploy_manifest_with_local_build operator.yaml
-  yq w -i -d1 cluster-test.yaml spec.dashboard.enabled false
-  yq w -i -d1 cluster-test.yaml spec.storage.useAllDevices false
-  yq w -i -d1 cluster-test.yaml spec.storage.deviceFilter "${BLOCK}"1
+  yq w -i -d0 cluster-test.yaml spec.dashboard.enabled false
+  yq w -i -d0 cluster-test.yaml spec.storage.useAllDevices false
+  yq w -i -d0 cluster-test.yaml spec.storage.deviceFilter "${BLOCK}"1
   kubectl create -f cluster-test.yaml
   deploy_toolbox
 }
 
 function deploy_second_rook_cluster() {
-  BLOCK=$(sudo lsblk | awk '/14G/ {print $1}' | head -1)
+  BLOCK=$(sudo lsblk | awk '/14G/ || /64G/ {print $1}' | head -1)
   cd deploy/examples/
   NAMESPACE=rook-ceph-secondary envsubst <common-second-cluster.yaml | kubectl create -f -
   sed -i 's/namespace: rook-ceph/namespace: rook-ceph-secondary/g' cluster-test.yaml
-  yq w -i -d1 cluster-test.yaml spec.storage.deviceFilter "${BLOCK}"2
-  yq w -i -d1 cluster-test.yaml spec.dataDirHostPath "/var/lib/rook-external"
+  yq w -i -d0 cluster-test.yaml spec.storage.deviceFilter "${BLOCK}"2
+  yq w -i -d0 cluster-test.yaml spec.dataDirHostPath "/var/lib/rook-external"
   kubectl create -f cluster-test.yaml
   yq w -i toolbox.yaml metadata.namespace rook-ceph-secondary
   deploy_toolbox

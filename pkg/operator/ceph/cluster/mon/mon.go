@@ -49,6 +49,8 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
+
+	cephcsi "github.com/ceph/ceph-csi/api/deploy/kubernetes"
 )
 
 const (
@@ -115,6 +117,8 @@ type Cluster struct {
 	ownerInfo          *k8sutil.OwnerInfo
 	isUpgrade          bool
 	arbiterMon         string
+	// list of mons to be failed over
+	monsToFailover sets.Set[string]
 }
 
 // monConfig for a single monitor
@@ -162,6 +166,7 @@ func New(ctx context.Context, clusterdContext *clusterd.Context, namespace strin
 		ClusterInfo: &cephclient.ClusterInfo{
 			Context: ctx,
 		},
+		monsToFailover: sets.New[string](),
 	}
 }
 
@@ -203,7 +208,7 @@ func (c *Cluster) Start(clusterInfo *cephclient.ClusterInfo, rookImage string, c
 
 	logger.Infof("targeting the mon count %d", c.spec.Mon.Count)
 
-	monsToSkipReconcile, err := c.getMonsToSkipReconcile()
+	monsToSkipReconcile, err := controller.GetDaemonsToSkipReconcile(c.ClusterInfo.Context, c.context, c.Namespace, config.MonType, AppName)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to check for mons to skip reconcile")
 	}
@@ -1101,7 +1106,13 @@ func (c *Cluster) saveMonConfig() error {
 	}
 
 	monEndpoints := csi.MonEndpoints(c.ClusterInfo.Monitors, c.spec.RequireMsgr2())
-	if err := csi.SaveClusterConfig(c.context.Clientset, c.Namespace, c.ClusterInfo, &csi.CsiClusterConfigEntry{Namespace: c.ClusterInfo.Namespace, Monitors: monEndpoints}); err != nil {
+	csiConfigEntry := &csi.CSIClusterConfigEntry{
+		Namespace: c.ClusterInfo.Namespace,
+		ClusterInfo: cephcsi.ClusterInfo{
+			Monitors: monEndpoints,
+		},
+	}
+	if err := csi.SaveClusterConfig(c.context.Clientset, c.Namespace, c.ClusterInfo, csiConfigEntry); err != nil {
 		return errors.Wrap(err, "failed to update csi cluster config")
 	}
 
@@ -1229,6 +1240,7 @@ func (c *Cluster) commitMaxMonIDRequireIncrementing(desiredMaxMonID int, require
 var updateDeploymentAndWait = UpdateCephDeploymentAndWait
 
 func (c *Cluster) updateMon(m *monConfig, d *apps.Deployment) error {
+
 	// Expand mon PVC if storage request for mon has increased in cephcluster crd
 	if c.monVolumeClaimTemplate(m) != nil {
 		desiredPvc, err := c.makeDeploymentPVC(m, false)
@@ -1333,6 +1345,18 @@ func (c *Cluster) startMon(m *monConfig, schedule *controller.MonScheduleInfo) e
 
 	p.ApplyToPodSpec(&d.Spec.Template.Spec)
 	if deploymentExists {
+		// skip update if mon path has changed
+		if hasMonPathChanged(existingDeployment, c.spec.Mon.VolumeClaimTemplate) {
+			c.monsToFailover.Insert(m.DaemonName)
+			return nil
+		}
+
+		// skip update if mon fail over is required due to change in hostnetwork settings
+		if isMonIPUpdateRequiredForHostNetwork(m.DaemonName, m.UseHostNetwork, &c.spec.Network) {
+			c.monsToFailover.Insert(m.DaemonName)
+			return nil
+		}
+
 		// the existing deployment may have a node selector. if the cluster
 		// isn't using host networking and the deployment is using pvc storage,
 		// then the node selector can be removed. this may happen after
@@ -1396,6 +1420,31 @@ func (c *Cluster) startMon(m *monConfig, schedule *controller.MonScheduleInfo) e
 	}
 
 	return nil
+}
+
+func isMonIPUpdateRequiredForHostNetwork(mon string, isMonUsingHostNetwork bool, network *cephv1.NetworkSpec) bool {
+	isHostNetworkEnabledInSpec := network.IsHost()
+	if isHostNetworkEnabledInSpec && !isMonUsingHostNetwork {
+		logger.Infof("host network is enabled for the cluster but mon %q is not running on host IP address", mon)
+		return true
+	} else if !isHostNetworkEnabledInSpec && isMonUsingHostNetwork {
+		logger.Infof("host network is disabled for the cluster but mon %q is still running on host IP address", mon)
+		return true
+	}
+
+	return false
+}
+
+func hasMonPathChanged(d *apps.Deployment, claim *v1.PersistentVolumeClaim) bool {
+	if d.Labels["pvc_name"] == "" && claim != nil {
+		logger.Infof("skipping update for mon %q where path has changed from hostPath to pvc", d.Name)
+		return true
+	} else if d.Labels["pvc_name"] != "" && claim == nil {
+		logger.Infof("skipping update for mon %q where path has changed from pvc to hostPath", d.Name)
+		return true
+	}
+
+	return false
 }
 
 func waitForQuorumWithMons(context *clusterd.Context, clusterInfo *cephclient.ClusterInfo, mons []string, sleepTime int, requireAllInQuorum bool) error {
@@ -1525,23 +1574,4 @@ func (c *Cluster) acquireOrchestrationLock() {
 func (c *Cluster) releaseOrchestrationLock() {
 	c.orchestrationMutex.Unlock()
 	logger.Debugf("Released lock for mon orchestration")
-}
-
-func (c *Cluster) getMonsToSkipReconcile() (sets.Set[string], error) {
-	listOpts := metav1.ListOptions{LabelSelector: fmt.Sprintf("%s=%s,%s", k8sutil.AppAttr, AppName, cephv1.SkipReconcileLabelKey)}
-
-	deployments, err := c.context.Clientset.AppsV1().Deployments(c.ClusterInfo.Namespace).List(c.ClusterInfo.Context, listOpts)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to query mons to skip reconcile")
-	}
-
-	result := sets.New[string]()
-	for _, deployment := range deployments.Items {
-		if monID, ok := deployment.Labels[config.MonType]; ok {
-			logger.Infof("found mon %q pod to skip reconcile", monID)
-			result.Insert(monID)
-		}
-	}
-
-	return result, nil
 }

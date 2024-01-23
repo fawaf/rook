@@ -35,12 +35,12 @@ jobs:
         with:
           version: v3.6.2
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: 3.9
 
       - name: Set up chart-testing
-        uses: helm/chart-testing-action@v2.4.0
+        uses: helm/chart-testing-action@v2.6.1
 
       - name: Run chart-testing (lint)
         run: ct lint --charts=./deploy/charts/rook-ceph --validate-yaml=false --validate-maintainers=false

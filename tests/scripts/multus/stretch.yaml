@@ -4,8 +4,8 @@ publicNetwork: "public-net"
 clusterNetwork: "cluster-net"
 
 resourceTimeout: "1m0s"
-
-nginxImage: "nginxinc/nginx-unprivileged:stable-alpine"
+flakyThreshold: "30s"
+nginxImage: "quay.io/nginx/nginx-unprivileged:stable-alpine"
 
 nodeTypes:
   arbiter-node:

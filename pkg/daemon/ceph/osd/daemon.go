@@ -181,10 +181,6 @@ func Provision(context *clusterd.Context, agent *OsdAgent, crushLocation, topolo
 	status := oposd.OrchestrationStatus{Status: oposd.OrchestrationStatusOrchestrating}
 	oposd.UpdateNodeOrPVCStatus(agent.clusterInfo.Context, agent.kv, agent.nodeName, status)
 
-	if err := client.WriteCephConfig(context, agent.clusterInfo); err != nil {
-		return errors.Wrap(err, "failed to generate ceph config")
-	}
-
 	logger.Infof("discovering hardware")
 
 	var rawDevices []*sys.LocalDisk
@@ -445,6 +441,11 @@ func getAvailableDevices(context *clusterd.Context, agent *OsdAgent) (*DeviceOsd
 			continue
 		}
 		logger.Infof("device %q is available.", device.Name)
+
+		if device.Type == sys.PartType && agent.storeConfig.EncryptedDevice {
+			logger.Infof("partition %q is not picked because encrypted OSD on partition is not allowed", device.Name)
+			continue
+		}
 
 		var deviceInfo *DeviceOsdIDEntry
 		if agent.metadataDevice != "" && agent.metadataDevice == device.Name {

@@ -23,6 +23,14 @@ to also change `ROOK_OPERATOR_NAMESPACE` to create a new Rook Operator for each 
 forget to set `ROOK_CURRENT_NAMESPACE_ONLY`), or you can leave it at the same value for every
 Ceph cluster if you only wish to have one Operator manage all Ceph clusters.
 
+If the operator namespace is different from the cluster namespace, the operator namespace must be
+created before running the steps below. The cluster namespace does not need to be created first,
+as it will be created by `common.yaml` in the script below.
+
+```console
+kubectl create namespace $ROOK_OPERATOR_NAMESPACE
+```
+
 This will help you manage namespaces more easily, but you should still make sure the resources are
 configured to your liking.
 
@@ -47,12 +55,23 @@ kubectl apply -f common.yaml -f operator.yaml -f cluster.yaml # add other files 
 
 ## Deploying a second cluster
 
-If you wish to create a new CephCluster in a different namespace than `rook-ceph` while using a single operator to manage both clusters execute the following:
+If you wish to create a new CephCluster in a separate namespace, you can easily do so
+by modifying the `ROOK_OPERATOR_NAMESPACE` and `SECOND_ROOK_CLUSTER_NAMESPACE` values in the
+below instructions. The default configuration in `common-second-cluster.yaml` is already
+set up to utilize `rook-ceph` for the operator and `rook-ceph-secondary` for the cluster.
+There's no need to run the `sed` command if you prefer to use these default values.
 
 ```console
 cd deploy/examples
+export ROOK_OPERATOR_NAMESPACE="rook-ceph"
+export SECOND_ROOK_CLUSTER_NAMESPACE="rook-ceph-secondary"
 
-NAMESPACE=rook-ceph-secondary envsubst < common-second-cluster.yaml | kubectl create -f -
+sed -i.bak \
+    -e "s/\(.*\):.*# namespace:operator/\1: $ROOK_OPERATOR_NAMESPACE # namespace:operator/g" \
+    -e "s/\(.*\):.*# namespace:cluster/\1: $SECOND_ROOK_CLUSTER_NAMESPACE # namespace:cluster/g" \
+  common-second-cluster.yaml
+
+kubectl create -f common-second-cluster.yaml
 ```
 
 This will create all the necessary RBACs as well as the new namespace. The script assumes that `common.yaml` was already created.
@@ -187,11 +206,13 @@ ceph osd pool set rbd pg_num 512
 ## Custom `ceph.conf` Settings
 
 !!! warning
-    The advised method for controlling Ceph configuration is to manually use the Ceph CLI
-    or the Ceph dashboard because this offers the most flexibility. It is highly recommended that this
-    only be used when absolutely necessary and that the `config` be reset to an empty string if/when the
-    configurations are no longer necessary. Configurations in the config file will make the Ceph cluster
-    less configurable from the CLI and dashboard and may make future tuning or debugging difficult.
+    The advised method for controlling Ceph configuration is to use the [`cephConfig:` structure](../../CRDs/Cluster/ceph-cluster-crd.md#ceph-config)
+    in the `CephCluster` CRD.
+
+    It is highly recommended that this only be used when absolutely necessary and that the `config` be
+    reset to an empty string if/when the configurations are no longer necessary. Configurations in the
+    config file will make the Ceph cluster less configurable from the CLI and dashboard and may make
+    future tuning or debugging difficult.
 
 Setting configs via Ceph's CLI requires that at least one mon be available for the configs to be
 set, and setting configs via dashboard requires at least one mgr to be available. Ceph also has
@@ -297,7 +318,7 @@ After the CSI pods are restarted, the new settings should be in effect.
 
 ### Example CSI `ceph.conf` Settings
 
-In this [Example](https://github.com/rook/rook/tree/master/deploy/csi-ceph-conf-override.yaml) we
+In this [Example](https://github.com/rook/rook/tree/master/deploy/examples/csi-ceph-conf-override.yaml) we
 will set the `rbd_validate_pool` to `false` to skip rbd pool validation.
 
 !!! warning

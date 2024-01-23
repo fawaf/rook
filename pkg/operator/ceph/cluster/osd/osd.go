@@ -22,7 +22,6 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -208,7 +207,7 @@ func (c *Cluster) Start() error {
 		return errors.Wrapf(err, "failed to replace an OSD that needs migration to new backend store in namespace %q", namespace)
 	}
 
-	osdsToSkipReconcile, err := c.getOSDsToSkipReconcile()
+	osdsToSkipReconcile, err := controller.GetDaemonsToSkipReconcile(c.clusterInfo.Context, c.context, c.clusterInfo.Namespace, OsdIdLabelKey, AppName)
 	if err != nil {
 		logger.Warningf("failed to get osds to skip reconcile. %v", err)
 	}
@@ -269,20 +268,30 @@ func (c *Cluster) Start() error {
 		return errors.Wrapf(err, "failed to update ceph storage status")
 	}
 
-	if c.replaceOSD != nil {
-		delOpts := &k8sutil.DeleteOptions{MustDelete: true, WaitOptions: k8sutil.WaitOptions{Wait: true}}
-		err := k8sutil.DeleteConfigMap(c.clusterInfo.Context, c.context.Clientset, OSDReplaceConfigName, namespace, delOpts)
-		if err != nil {
-			return errors.Wrapf(err, "failed to delete the %q configmap", OSDReplaceConfigName)
+	if c.spec.Storage.Store.UpdateStore == OSDStoreUpdateConfirmation {
+		if c.replaceOSD != nil {
+			delOpts := &k8sutil.DeleteOptions{MustDelete: true, WaitOptions: k8sutil.WaitOptions{Wait: true}}
+			err := k8sutil.DeleteConfigMap(c.clusterInfo.Context, c.context.Clientset, OSDReplaceConfigName, namespace, delOpts)
+			if err != nil {
+				return errors.Wrapf(err, "failed to delete the %q configmap", OSDReplaceConfigName)
+			}
 		}
 
-		// Wait for PGs to be healthy before continuing the reconcile
-		_, err = c.waitForHealthyPGs()
+		// wait for the pgs to be healthy before attempting to migrate the next OSD
+		_, err := c.waitForHealthyPGs()
 		if err != nil {
 			return errors.Wrapf(err, "failed to wait for pgs to be healhty")
 		}
 
-		return errors.New("reconcile operator to replace OSDs that are pending migration")
+		// reconcile if migration of one or more OSD is pending.
+		osdsToReplace, err := c.getOSDWithNonMatchingStore()
+		if err != nil {
+			return errors.Wrapf(err, "failed to check if any OSD migration is pending")
+		}
+
+		if len(osdsToReplace) != 0 {
+			return errors.New("reconcile operator to replace OSDs that are pending migration")
+		}
 	}
 
 	logger.Infof("finished running OSDs in namespace %q", namespace)
@@ -301,24 +310,6 @@ func (c *Cluster) getExistingOSDDeploymentsOnPVCs() (sets.Set[string], error) {
 	for _, deployment := range deployments.Items {
 		if pvcID, ok := deployment.Labels[OSDOverPVCLabelKey]; ok {
 			result.Insert(pvcID)
-		}
-	}
-
-	return result, nil
-}
-
-func (c *Cluster) getOSDsToSkipReconcile() (sets.Set[string], error) {
-	listOpts := metav1.ListOptions{LabelSelector: fmt.Sprintf("%s=%s,%s", k8sutil.AppAttr, AppName, cephv1.SkipReconcileLabelKey)}
-
-	deployments, err := c.context.Clientset.AppsV1().Deployments(c.clusterInfo.Namespace).List(c.clusterInfo.Context, listOpts)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to query OSDs to skip reconcile")
-	}
-
-	result := sets.New[string]()
-	for _, deployment := range deployments.Items {
-		if osdID, ok := deployment.Labels[OsdIdLabelKey]; ok {
-			result.Insert(osdID)
 		}
 	}
 
@@ -595,13 +586,7 @@ func (c *Cluster) getOSDInfo(d *appsv1.Deployment) (OSDInfo, error) {
 	}
 
 	locationFound := false
-	for _, a := range container.Command {
-		locationPrefix := "--crush-location="
-		if strings.Contains(a, locationPrefix) {
-			locationFound = true
-			osd.Location = getLocationWithRegex(a)
-		}
-	}
+	osd.Location, locationFound = getOSDLocationFromArgs(container.Args)
 
 	if !locationFound {
 		location, _, err := getLocationFromPod(c.clusterInfo.Context, c.context.Clientset, d, cephclient.GetCrushRootFromSpec(&c.spec))
@@ -864,14 +849,14 @@ func (c *Cluster) replaceOSDForNewStore() error {
 
 func (c *Cluster) waitForHealthyPGs() (bool, error) {
 	waitFunc := func() (done bool, err error) {
-		pgHealthMsg, pgClean, err := cephclient.IsClusterClean(c.context, c.clusterInfo)
+		pgHealthMsg, pgClean, err := cephclient.IsClusterClean(c.context, c.clusterInfo, c.spec.DisruptionManagement.PGHealthyRegex)
 		if err != nil {
 			return false, errors.Wrap(err, "failed to check pg are healthy")
 		}
 		if pgClean {
 			return true, nil
 		}
-		logger.Infof("waiting for PGs to be healthy after replacing an OSD, status: %q", pgHealthMsg)
+		logger.Infof("waiting for PGs to be healthy. PG status: %q", pgHealthMsg)
 		return false, nil
 	}
 
@@ -943,11 +928,15 @@ func (c *Cluster) getOSDStoreStatus() (*cephv1.OSDStatus, error) {
 	}, nil
 }
 
-func getLocationWithRegex(input string) string {
-	rx := regexp.MustCompile(`--crush-location="(.+?)"`)
-	match := rx.FindStringSubmatch(input)
-	if len(match) == 2 {
-		return strings.TrimSpace(match[1])
+func getOSDLocationFromArgs(args []string) (string, bool) {
+	for _, a := range args {
+		locationPrefix := "--crush-location="
+		if strings.HasPrefix(a, locationPrefix) {
+			// Extract the same CRUSH location as originally determined by the OSD prepare pod
+			// by cutting off the prefix: --crush-location=
+			return a[len(locationPrefix):], true
+		}
 	}
-	return ""
+
+	return "", false
 }

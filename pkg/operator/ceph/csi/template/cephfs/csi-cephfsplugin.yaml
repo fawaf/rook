@@ -71,10 +71,7 @@ spec:
             - "--nodeserver=true"
             - "--drivername={{ .DriverNamePrefix }}cephfs.csi.ceph.com"
             - "--pidlimit=-1"
-            - "--metricsport={{ .CephFSGRPCMetricsPort }}"
             - "--forcecephkernelclient={{ .ForceCephFSKernelClient }}"
-            - "--metricspath=/metrics"
-            - "--enablegrpcmetrics={{ .EnableCSIGRPCMetrics }}"
             {{ if .CephFSKernelMountOptions }}
             - "--kernelmountoptions={{ .CephFSKernelMountOptions }}"
             {{ end }}
@@ -97,6 +94,8 @@ spec:
           volumeMounts:
             - name: plugin-dir
               mountPath: /csi
+            - name: ceph-csi-mountinfo
+              mountPath: /csi/mountinfo
             - name: csi-plugins-dir
               mountPath: "{{ .KubeletDirPath }}/plugins"
               mountPropagation: "Bidirectional"
@@ -153,6 +152,10 @@ spec:
           imagePullPolicy: {{ .ImagePullPolicy }}
         {{ end }}
       volumes:
+        - name: ceph-csi-mountinfo
+          hostPath:
+            path: "{{ .KubeletDirPath }}/plugins/{{ .DriverNamePrefix }}cephfs.csi.ceph.com/mountinfo"
+            type: DirectoryOrCreate
         - name: plugin-dir
           hostPath:
             path: "{{ .KubeletDirPath }}/plugins/{{ .DriverNamePrefix }}cephfs.csi.ceph.com/"

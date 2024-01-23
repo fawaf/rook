@@ -26,12 +26,12 @@ Settings can be specified at the global level to apply to the cluster as a whole
 * `external`:
     * `enable`: if `true`, the cluster will not be managed by Rook but via an external entity. This mode is intended to connect to an existing cluster. In this case, Rook will only consume the external cluster. However, Rook will be able to deploy various daemons in Kubernetes such as object gateways, mds and nfs if an image is provided and will refuse otherwise. If this setting is enabled **all** the other options will be ignored except `cephVersion.image` and `dataDirHostPath`. See [external cluster configuration](external-cluster.md). If `cephVersion.image` is left blank, Rook will refuse the creation of extra CRs like object, file and nfs.
 * `cephVersion`: The version information for launching the ceph daemons.
-    * `image`: The image used for running the ceph daemons. For example, `quay.io/ceph/ceph:v16.2.11` or `v17.2.6`. For more details read the [container images section](#ceph-container-images).
+    * `image`: The image used for running the ceph daemons. For example, `quay.io/ceph/ceph:v18.2.1`. For more details read the [container images section](#ceph-container-images).
   For the latest ceph images, see the [Ceph DockerHub](https://hub.docker.com/r/ceph/ceph/tags/).
   To ensure a consistent version of the image is running across all nodes in the cluster, it is recommended to use a very specific image version.
   Tags also exist that would give the latest version, but they are only recommended for test environments. For example, the tag `v17` will be updated each time a new Quincy build is released.
   Using the `v17` tag is not recommended in production because it may lead to inconsistent versions of the image running across different nodes in the cluster.
-    * `allowUnsupported`: If `true`, allow an unsupported major version of the Ceph release. Currently `pacific`, `quincy`, and `reef` are supported. Future versions such as `squid` (v19) would require this to be set to `true`. Should be set to `false` in production.
+    * `allowUnsupported`: If `true`, allow an unsupported major version of the Ceph release. Currently `quincy` and `reef` are supported. Future versions such as `squid` (v19) would require this to be set to `true`. Should be set to `false` in production.
   `imagePullPolicy`: The image pull policy for the ceph daemon pods. Possible values are `Always`, `IfNotPresent`, and `Never`.
   The default is `IfNotPresent`.
 * `dataDirHostPath`: The path on the host ([hostPath](https://kubernetes.io/docs/concepts/storage/volumes/#hostpath)) where config and data should be stored for each of the services. If the directory does not exist, it will be created. Because this directory persists on the host, it will remain after pods are deleted. Following paths and any of their subpaths **must not be used**: `/etc/ceph`, `/rook` or `/var/log/ceph`.
@@ -61,7 +61,7 @@ For more details on the mons and when to choose a number other than `3`, see the
 	updates the label `mgr_role` on the mgr pods to be either `active` or `standby`. Therefore, services need just to add the label
     `mgr_role=active` to their selector to point to the active mgr. This applies to all services that rely on the ceph mgr such as
 	the dashboard or the prometheus metrics collector.
-    * `modules`: is the list of Ceph manager modules to enable
+    * `modules`: A list of Ceph manager modules to enable or disable. Note the "dashboard" and "monitoring" modules are already configured by other settings.
 * `crashCollector`: The settings for crash collector daemon(s).
     * `disable`: is set to `true`, the crash collector will not run on any node where a Ceph daemon runs
     * `daysToRetain`: specifies the number of days to keep crash entries in the Ceph cluster. By default the entries are kept indefinitely.
@@ -85,13 +85,20 @@ For more details on the mons and when to choose a number other than `3`, see the
     * `onlyApplyOSDPlacement`: Whether the placement specific for OSDs is merged with the `all` placement. If `false`, the OSD placement will be merged with the `all` placement. If true, the `OSD placement will be applied` and the `all` placement will be ignored. The placement for OSDs is computed from several different places depending on the type of OSD:
         * For non-PVCs: `placement.all` and `placement.osd`
         * For PVCs: `placement.all` and inside the storageClassDeviceSets from the `placement` or `preparePlacement`
-    * `flappingRestartIntervalHours`: Defines the time for which an OSD pod will sleep before restarting, if it stopped due to flapping. Flapping occurs where OSDs are marked `down` by Ceph more than 5 times in 600 seconds. The OSDs will stay down when flapping since they likely have a bad disk or other issue that needs investigation. The default is 24 hours. If the issue with the OSD is fixed manually, the OSD pod can be manually restarted.
+    * `flappingRestartIntervalHours`: Defines the time for which an OSD pod will sleep before restarting, if it stopped due to flapping. Flapping occurs where OSDs are marked `down` by Ceph more than 5 times in 600 seconds. The OSDs will stay down when flapping since they likely have a bad disk or other issue that needs investigation. If the issue with the OSD is fixed manually, the OSD pod can be manually restarted. The sleep is disabled if this interval is set to 0.
 * `disruptionManagement`: The section for configuring management of daemon disruptions
     * `managePodBudgets`: if `true`, the operator will create and manage PodDisruptionBudgets for OSD, Mon, RGW, and MDS daemons. OSD PDBs are managed dynamically via the strategy outlined in the [design](https://github.com/rook/rook/blob/master/design/ceph/ceph-managed-disruptionbudgets.md). The operator will block eviction of OSDs by default and unblock them safely when drains are detected.
-    * `osdMaintenanceTimeout`: is a duration in minutes that determines how long an entire failureDomain like `region/zone/host` will be held in `noout` (in addition to the default DOWN/OUT interval) when it is draining. This is only relevant when  `managePodBudgets` is `true`. The default value is `30` minutes.
+    * `osdMaintenanceTimeout`: is a duration in minutes that determines how long an entire failureDomain like `region/zone/host` will be held in `noout` (in addition to the default DOWN/OUT interval) when it is draining. The default value is `30` minutes.
+    * `pgHealthCheckTimeout`: A duration in minutes that the operator will wait for the placement groups to become healthy (see `pgHealthyRegex`) after a drain was completed and OSDs came back up.
+    Operator will continue with the next drain if the timeout exceeds.
+    No values or `0` means that the operator will wait until the placement groups are healthy before unblocking the next drain.
+    * `pgHealthyRegex`: The regular expression that is used to determine which PG states should be considered healthy.
+    The default is `^(active\+clean|active\+clean\+scrubbing|active\+clean\+scrubbing\+deep)$`.
 * `removeOSDsIfOutAndSafeToRemove`: If `true` the operator will remove the OSDs that are down and whose data has been restored to other OSDs. In Ceph terms, the OSDs are `out` and `safe-to-destroy` when they are removed.
 * `cleanupPolicy`: [cleanup policy settings](#cleanup-policy)
 * `security`: [security page for key management configuration](../../Storage-Configuration/Advanced/key-management-system.md)
+* `cephConfig`: [Set Ceph config options using the Ceph Mon config store](#ceph-config)
+* `csi`: [Set CSI Driver options](#csi-driver-options)
 
 ### Ceph container images
 
@@ -104,8 +111,8 @@ These are general purpose Ceph container with all necessary daemons and dependen
 | -------------------- | --------------------------------------------------------- |
 | vRELNUM              | Latest release in this series (e.g., *v17* = Quincy)      |
 | vRELNUM.Y            | Latest stable release in this stable series (e.g., v17.2) |
-| vRELNUM.Y.Z          | A specific release (e.g., v17.2.6)                        |
-| vRELNUM.Y.Z-YYYYMMDD | A specific build (e.g., v17.2.6-20230410)                 |
+| vRELNUM.Y.Z          | A specific release (e.g., v18.2.1)                        |
+| vRELNUM.Y.Z-YYYYMMDD | A specific build (e.g., v18.2.1-20240103)                 |
 
 A specific will contain a specific release of Ceph as well as security fixes from the Operating System.
 
@@ -211,7 +218,7 @@ Configure the network that will be enabled for the cluster and services.
           If this setting is enabled, CephFS volumes also require setting `CSI_CEPHFS_KERNEL_MOUNT_OPTIONS` to `"ms_mode=secure"` in operator.yaml.
     * `compression`:
         * `enabled`: Whether to compress the data in transit across the wire. The default is false.
-      Requires Ceph Quincy (v17) or newer. Also see the kernel requirements above for encryption.
+      See the kernel requirements above for encryption.
 
 !!! caution
     Changing networking configuration after a Ceph cluster has been deployed is NOT
@@ -368,8 +375,8 @@ repository. At the time of writing it's unclear when this will be supported.
 
 #### IPFamily
 
-Provide single-stack IPv4 or IPv6 protocol to assign corresponding addresses to pods and services. This field is optional. Possible inputs are IPv6 and IPv4. Empty value will be treated as IPv4. Kubernetes version should be at least v1.13 to run IPv6. Dual-stack is supported as of ceph Pacific.
-To turn on dual stack see the [network configuration section](#network-configuration-settings).
+Provide single-stack IPv4 or IPv6 protocol to assign corresponding addresses to pods and services. This field is optional. Possible inputs are IPv6 and IPv4. Empty value will be treated as IPv4.
+To enable dual stack see the [network configuration section](#network-configuration-settings).
 
 ### Node Settings
 
@@ -421,7 +428,7 @@ Below are the settings for host-based cluster. This type of cluster can specify 
     * `name`: The name of the devices and partitions (e.g., `sda`). The full udev path can also be specified for devices, partitions, and logical volumes (e.g. `/dev/disk/by-id/ata-ST4000DM004-XXXX` - this will not change after reboots).
     * `config`: Device-specific config settings. See the [config settings](#osd-configuration-settings) below
 
-Host-based cluster supports raw device, partition, and logical volume. Be sure to see the
+Host-based cluster supports raw devices, partitions, logical volumes, encrypted devices, and multipath devices. Be sure to see the
 [quickstart doc prerequisites](../../Getting-Started/quickstart.md#prerequisites) for additional considerations.
 
 Below are the settings for a PVC-based cluster.
@@ -456,12 +463,16 @@ The following are the settings for Storage Class Device Sets which can be config
 * `tuneDeviceClass`: For example, Ceph cannot detect AWS volumes as HDDs from the storage class "gp2", so you can improve Ceph performance by setting this to true.
 * `tuneFastDeviceClass`: For example, Ceph cannot detect Azure disks as SSDs from the storage class "managed-premium", so you can improve Ceph performance by setting this to true..
 * `volumeClaimTemplates`: A list of PVC templates to use for provisioning the underlying storage devices.
+  * `metadata.name`: "data", "metadata", or "wal". If a single template is provided, the name must be "data". If the name is "metadata" or "wal", the devices are used to store the Ceph metadata or WAL respectively. In both cases, the devices must be raw devices or LVM logical volumes.
+
     * `resources.requests.storage`: The desired capacity for the underlying storage devices.
-    * `storageClassName`: The StorageClass to provision PVCs from. Default would be to use the cluster-default StorageClass. This StorageClass should provide a raw block device, multipath device, or logical volume. Other types are not supported. If you want to use logical volume, please see [known issue of OSD on LV-backed PVC](../../Troubleshooting/ceph-common-issues.md#lvm-metadata-can-be-corrupted-with-osd-on-lv-backed-pvc)
+    * `storageClassName`: The StorageClass to provision PVCs from. Default would be to use the cluster-default StorageClass.
     * `volumeMode`: The volume mode to be set for the PVC. Which should be Block
     * `accessModes`: The access mode for the PVC to be bound by OSD.
 * `schedulerName`: Scheduler name for OSD pod placement. (Optional)
 * `encrypted`: whether to encrypt all the OSDs in a given storageClassDeviceSet
+
+See the table in [OSD Configuration Settings](#osd-configuration-settings) to know the allowed configurations.
 
 ### OSD Configuration Settings
 
@@ -474,8 +485,18 @@ The following storage selection settings are specific to Ceph and do not apply t
 * `initialWeight`: The initial OSD weight in TiB units. By default, this value is derived from OSD's capacity.
 * `primaryAffinity`: The [primary-affinity](https://docs.ceph.com/en/latest/rados/operations/crush-map/#primary-affinity) value of an OSD, within range `[0, 1]` (default: `1`).
 * `osdsPerDevice`**: The number of OSDs to create on each device. High performance devices such as NVMe can handle running multiple OSDs. If desired, this can be overridden for each node and each device.
-* `encryptedDevice`**: Encrypt OSD volumes using dmcrypt ("true" or "false"). By default this option is disabled. See [encryption](http://docs.ceph.com/docs/master/ceph-volume/lvm/encryption/) for more information on encryption in Ceph.
+* `encryptedDevice`**: Encrypt OSD volumes using dmcrypt ("true" or "false"). By default this option is disabled. See [encryption](http://docs.ceph.com/docs/master/ceph-volume/lvm/encryption/) for more information on encryption in Ceph. (Resizing is not supported for host-based clusters.)
 * `crushRoot`: The value of the `root` CRUSH map label. The default is `default`. Generally, you should not need to change this. However, if any of your topology labels may have the value `default`, you need to change `crushRoot` to avoid conflicts, since CRUSH map values need to be unique.
+
+Allowed configurations are:
+
+| block device type | host-based cluster                                                                                | PVC-based cluster                                                               |
+| :---------------- | :------------------------------------------------------------------------------------------------ | :------------------------------------------------------------------------------ |
+| disk              |                                                                                                   |                                                                                 |
+| part              | `encryptedDevice` must be `false`                                                                 | `encrypted` must be `false`                                                     |
+| lvm               | `metadataDevice` must be `""`, `osdsPerDevice` must be `1`, and `encryptedDevice` must be `false` | `metadata.name` must not be `metadata` or `wal` and `encrypted` must be `false` |
+| crypt             |                                                                                                   |                                                                                 |
+| mpath             |                                                                                                   |                                                                                 |
 
 ### Annotations and Labels
 
@@ -533,7 +554,7 @@ metadata:
   namespace: rook-ceph
 spec:
   cephVersion:
-    image: quay.io/ceph/ceph:v17.2.6
+    image: quay.io/ceph/ceph:v18.2.1
   dataDirHostPath: /var/lib/rook
   mon:
     count: 3
@@ -636,7 +657,7 @@ metadata:
   namespace: rook-ceph
 spec:
   cephVersion:
-    image: quay.io/ceph/ceph:v17.2.6
+    image: quay.io/ceph/ceph:v18.2.1
   dataDirHostPath: /var/lib/rook
   mon:
     count: 3
@@ -765,7 +786,7 @@ kubectl -n rook-ceph get CephCluster -o yaml
       deviceClasses:
       - name: hdd
     version:
-      image: quay.io/ceph/ceph:v17.2.6
+      image: quay.io/ceph/ceph:v18.2.1
       version: 16.2.6-0
     conditions:
     - lastHeartbeatTime: "2021-03-02T21:22:11Z"
@@ -923,3 +944,46 @@ However, all new configuration by the operator will be blocked with this cleanup
 Rook waits for the deletion of PVs provisioned using the cephCluster before proceeding to delete the
 cephCluster. To force deletion of the cephCluster without waiting for the PVs to be deleted, you can
 set the `allowUninstallWithVolumes` to true under `spec.CleanupPolicy`.
+
+## Ceph Config
+
+!!! attention
+    This feature is experimental.
+
+The Ceph config options are applied after the MONs are all in quorum and running.
+To set Ceph config options, you can add them to your `CephCluster` spec as shown below.
+See the [Ceph config reference](https://docs.ceph.com/en/latest/rados/configuration/general-config-ref/)
+for detailed information about how to configure Ceph.
+
+```yaml
+spec:
+  # [...]
+  cephConfig:
+    # Who's the target for these config options?
+    global:
+      # All values must be quoted so they are considered a string in YAML
+      osd_pool_default_size: "3"
+      mon_warn_on_pool_no_redundancy: "false"
+      osd_crush_update_on_start: "false"
+    # Make sure to quote special characters
+    "osd.*":
+      osd_max_scrubs: "10"
+```
+
+!!! warning
+    Rook performs no direct validation on these config options, so the validity of the settings is the
+    user's responsibility.
+
+The operator does not unset any removed config options, it is the user's responsibility to unset or set the default value for each removed option manually using the Ceph CLI.
+
+## CSI Driver Options
+
+The CSI driver options mentioned here are applied per Ceph cluster. The following options are available:
+
+* `readAffinity`: RBD and CephFS volumes allow serving reads from an OSD in proximity to the client. Refer to the read affinity section in the [Ceph CSI Drivers](../../Storage-Configuration/Ceph-CSI/ceph-csi-drivers.md#enable-read-affinity-for-rbd-and-cephfs-volumes) for more details.
+    * `enabled`: Whether to enable read affinity for the CSI driver. Default is `false`.
+    * `crushLocationLabels`:  Node labels to use as CRUSH location, corresponding to the values set in the CRUSH map. Defaults to the labels mentioned in the
+[OSD topology](#osd-topology) topic.
+* `cephfs`:
+    * `kernelMountOptions`: Mount options for kernel mounter. Refer to the [kernel mount options](https://docs.ceph.com/en/latest/man/8/mount.ceph/#options) for more details.
+    * `fuseMountOptions`: Mount options for fuse mounter. Refer to the [fuse mount options](https://docs.ceph.com/en/latest/man/8/ceph-fuse/#options) for more details.
