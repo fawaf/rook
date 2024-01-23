@@ -1,0 +1,9 @@
+#!/bin/bash
+
+set -x
+
+CMD="kubectl create"
+
+$CMD --filename crds.yaml --filename common.yaml --filename operator.yaml
+
+$CMD --filename cluster.yaml
